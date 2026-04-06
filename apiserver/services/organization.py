@@ -3,7 +3,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
 from operator import itemgetter
-from typing import Mapping, Type, Sequence, Optional, Callable, Hashable, Tuple, Union
+from typing import Mapping, Type, Sequence, Optional, Callable, Hashable
 
 from flask import stream_with_context
 from mongoengine import Q
@@ -15,11 +15,10 @@ from apiserver.apimodels.organization import (
     DownloadForGetAllRequest,
     EntityType,
     PrepareDownloadForGetAllRequest,
-    GetProjectWorkloadsRequest,
 )
 from apiserver.bll.model import Metadata
 from apiserver.bll.organization import OrgBLL, Tags
-from apiserver.bll.project import ProjectBLL, ProjectWorkloads
+from apiserver.bll.project import ProjectBLL
 from apiserver.config_repo import config
 from apiserver.database.model import User, AttributedDocument, EntityVisibility
 from apiserver.database.model.model import Model
@@ -36,7 +35,6 @@ from apiserver.services.tasks import (
 from apiserver.services.utils import get_tags_filter_dictionary, sort_tags_response
 from apiserver.utilities import json
 from apiserver.utilities.dicts import nested_get
-from apiserver.utilities.parameter_key_escaper import ParameterKeyEscaper
 
 org_bll = OrgBLL()
 project_bll = ProjectBLL()
@@ -92,10 +90,12 @@ def get_entities_count(call: APICall, company, request: EntitiesCountRequest):
         "dataset_versions": Task,
         "reports": Task,
     }
+    ret = {}
+    for field, entity_cls in entity_classes.items():
+        data = call.data.get(field)
+        if data is None:
+            continue
 
-    def calc_entities_count(
-        field: str, data: dict, entity_cls: Type[AttributedDocument]
-    ) -> int:
         if field == "reports":
             data["type"] = TaskType.report
         elif field == "pipeline_runs":
@@ -117,7 +117,8 @@ def get_entities_count(call: APICall, company, request: EntitiesCountRequest):
                     allow_public=request.allow_public,
                 )
                 if not ids:
-                    return 0
+                    ret[field] = 0
+                    continue
                 data["id"] = ids
             elif not data.get("user"):
                 data["user"] = request.active_users
@@ -125,8 +126,7 @@ def get_entities_count(call: APICall, company, request: EntitiesCountRequest):
         query = Q()
         if (
             entity_cls in (Project, Task)
-            and field
-            not in (
+            and field not in (
                 "reports",
                 "pipelines",
                 "pipeline_runs",
@@ -138,7 +138,7 @@ def get_entities_count(call: APICall, company, request: EntitiesCountRequest):
             query &= Q(system_tags__ne=EntityVisibility.hidden.value)
 
         if not request.limit:
-            return entity_cls.get_count(
+            ret[field] = entity_cls.get_count(
                 company=company,
                 query_dict=data,
                 query=query,
@@ -152,42 +152,7 @@ def get_entities_count(call: APICall, company, request: EntitiesCountRequest):
                 allow_public=request.allow_public,
             )
             ids = entity_cls.objects(query).limit(request.limit).scalar("id")
-            return len(ids)
-
-    count_jobs = [
-        (field, data, entity_cls)
-        for field, entity_cls in entity_classes.items()
-        if (data := call.data.get(field)) is not None
-    ]
-    num_workers = conf.get("max_entities_count_concurrency", 0)
-    errs = {}
-    ret = {}
-    if not num_workers:
-        for field, data, entity_cls in count_jobs:
-            try:
-                ret[field] = calc_entities_count(field, data, entity_cls)
-            except Exception as ex:
-                errs[field] = str(ex)
-    else:
-
-        def calc_wrapper(input_: tuple) -> Tuple[str, Union[int, str]]:
-            field, data, entity_cls = input_
-            try:
-                result = calc_entities_count(field, data, entity_cls)
-            except Exception as ex_:
-                result = str(ex_)
-
-            return field, result
-
-        with ThreadPoolExecutor(max_workers=num_workers) as pool:
-            for field, res in pool.map(calc_wrapper, count_jobs):
-                if isinstance(res, int):
-                    ret[field] = res
-                else:
-                    errs[field] = res
-
-    if errs:
-        ret["errors"] = errs
+            ret[field] = len(ids)
 
     call.result.data = ret
 
@@ -300,7 +265,7 @@ def download_for_get_all(call: APICall, company, request: DownloadForGetAllReque
     request_data = redis.get(f"get_all_download_{request.prepare_id}")
     if not request_data:
         raise errors.bad_request.InvalidId(
-            "prepare ID not found", prepare_id=request.prepare_id
+            f"prepare ID not found", prepare_id=request.prepare_id
         )
 
     try:
@@ -314,17 +279,10 @@ def download_for_get_all(call: APICall, company, request: DownloadForGetAllReque
         def write(line: str) -> str:
             return line
 
-    def get_field_path(path_str: str) -> Sequence[str]:
-        path = path_str.split(".")
-        if len(path) < 2 or path[0] not in ("metadata", "hyperparams", "configuration"):
-            return path
-
-        return [ParameterKeyEscaper.unescape(p) for p in path]
-
     def generate():
         field_mappings = {
             mapping.get("name", mapping["field"]): {
-                "field_path": get_field_path(mapping["field"]),
+                "field_path": mapping["field"].split("."),
                 "values": {
                     v.get("key"): v.get("value")
                     for v in (mapping.get("values") or [])
@@ -409,16 +367,3 @@ def download_for_get_all(call: APICall, company, request: DownloadForGetAllReque
     )
     call.result.content_type = "text/csv"
     call.result.raw_data = stream_with_context(generate())
-
-
-@endpoint("organization.get_project_workloads")
-def get_project_workloads(call: APICall, company, request: GetProjectWorkloadsRequest):
-    call.result.data = ProjectWorkloads.get_project_workloads(
-        company,
-        project_ids=request.projects,
-        from_date_str=request.from_date,
-        to_date_str=request.to_date,
-        include_development=request.include_development,
-        breakdown_keys=request.breakdown_keys,
-        usage_fields=request.usage_fields,
-    )

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Sequence
 
 import attr
@@ -18,7 +18,6 @@ from apiserver.utilities.attrs import typed_attrs
 
 valid_statuses = get_options(TaskStatus)
 deleted_prefix = "__DELETED__"
-task_running_statuses = [TaskStatus.queued, TaskStatus.in_progress]
 
 
 @typed_attrs
@@ -43,7 +42,7 @@ class ChangeStatusRequest(object):
 
         control = dict(upsert=False, multi=False, write_concern=None, full_result=False)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         fields = dict(
             status=self.new_status,
             status_reason=self.status_reason,
@@ -251,10 +250,9 @@ def get_task_for_update(
     if allow_all_statuses:
         return task
 
-    allowed_statuses = [TaskStatus.created]
-    if force:
-        allowed_statuses.extend(task_running_statuses)
-
+    allowed_statuses = (
+        [TaskStatus.created, TaskStatus.in_progress] if force else [TaskStatus.created]
+    )
     if task.status not in allowed_statuses:
         raise errors.bad_request.InvalidTaskStatus(
             expected=TaskStatus.created, status=task.status
@@ -265,7 +263,7 @@ def get_task_for_update(
 def update_task(
     task: Task, user_id: str, update_cmds: dict, set_last_update: bool = True
 ):
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     last_updates = dict(last_change=now, last_changed_by=user_id)
     if set_last_update:
         last_updates.update(last_update=now)

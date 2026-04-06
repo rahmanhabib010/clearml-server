@@ -1,4 +1,4 @@
-from enum import StrEnum
+from enum import Enum
 
 from mongoengine import StringField, DateTimeField, IntField, EnumField
 
@@ -6,7 +6,7 @@ from apiserver.database import Database, strict
 from apiserver.database.model import AttributedDocument
 
 
-class StorageType(StrEnum):
+class StorageType(str, Enum):
     fileserver = "fileserver"
     s3 = "s3"
     azure = "azure"
@@ -14,12 +14,12 @@ class StorageType(StrEnum):
     unknown = "unknown"
 
 
-class FileType(StrEnum):
+class FileType(str, Enum):
     file = "file"
     folder = "folder"
 
 
-class DeletionStatus(StrEnum):
+class DeletionStatus(str, Enum):
     created = "created"
     retrying = "retrying"
     failed = "failed"

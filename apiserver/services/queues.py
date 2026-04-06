@@ -22,7 +22,6 @@ from apiserver.apimodels.queues import (
     GetAllRequest,
     AddTaskRequest,
     RemoveTaskRequest,
-    MoveTaskToQueueRequest,
 )
 from apiserver.bll.model import Metadata
 from apiserver.bll.queue import QueueBLL
@@ -61,7 +60,7 @@ def get_by_id(call: APICall, company_id, request: GetByIdRequest):
 
 
 @endpoint("queues.get_default", min_version="2.4", response_data_model=GetDefaultResp)
-def get_by_id_2_4(call: APICall):
+def get_by_id(call: APICall):
     queue = queue_bll.get_default(call.identity.company)
     call.result.data_model = GetDefaultResp(id=queue.id, name=queue.name)
 
@@ -93,7 +92,6 @@ def get_all_ex(call: APICall, company: str, request: GetAllRequest):
         query_dict=call_data,
         query=_hidden_query(call_data),
         max_task_entries=request.max_task_entries,
-        count_task_entries=request.count_task_entries,
         ret_params=ret_params,
     )
     conform_queue_data(call, queues)
@@ -159,60 +157,16 @@ def delete(call: APICall, company_id, request: DeleteRequest):
     call.result.data = {"deleted": 1}
 
 
-def update_added_task_properties(queue: str, task: str, update_execution_queue: bool):
-    if update_execution_queue:
-        Task.objects(id=task).update(
-            execution__queue=queue, multi=False
-        )
-
-
-@endpoint("queues.move_task_to_queue")
-def move_task_to_queue(call: APICall, company_id, request: MoveTaskToQueueRequest):
-    removed = queue_bll.remove_task(
-        company_id=company_id,
-        user_id=call.identity.user,
-        queue_id=request.queue,
-        task_id=request.task,
-    )
-    if not removed:
-        return  {"moved": 0}
-
-    try:
-        queue_bll.add_task(
-            company_id=company_id,
-            queue_id=request.target_queue,
-            task_id=request.task,
-        )
-    except Exception as e:
-        # on error return task back to the source queue
-        queue_bll.add_task(
-            company_id=company_id,
-            queue_id=request.queue,
-            task_id=request.task,
-        )
-        raise e
-
-    update_added_task_properties(
-        queue=request.target_queue,
-        task=request.task,
-        update_execution_queue=request.update_execution_queue,
-    )
-
-    call.result.data = {"moved": 1}
-
-
 @endpoint("queues.add_task", min_version="2.4")
 def add_task(call: APICall, company_id, request: AddTaskRequest):
-    queue_bll.add_task(
+    added = queue_bll.add_task(
         company_id=company_id, queue_id=request.queue, task_id=request.task
     )
-    update_added_task_properties(
-        queue=request.queue,
-        task=request.task,
-        update_execution_queue=request.update_execution_queue,
-    )
-
-    call.result.data = {"added": 1}
+    if added and request.update_execution_queue:
+        Task.objects(id=request.task).update(
+            execution__queue=request.queue, multi=False
+        )
+    call.result.data = {"added": added}
 
 
 @endpoint("queues.get_next_task")

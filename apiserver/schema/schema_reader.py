@@ -12,7 +12,6 @@ from boltons.dictutils import subdict
 from pyhocon import ConfigFactory
 
 from apiserver.config_repo import config
-from apiserver.sync import distributed_lock
 from apiserver.utilities.partial_version import PartialVersion
 
 
@@ -73,6 +72,7 @@ class EndpointSchema:
 
 
 class EndpointVersionsGroup:
+
     endpoints: Sequence[EndpointSchema]
     allow_roles: Sequence[str]
     internal: bool
@@ -105,9 +105,6 @@ class EndpointVersionsGroup:
         self.full_name = f"{service_name}.{action_name}"
         self.definitions = definitions or {}
         self.defaults = defaults or {}
-        self._init_endpoints(conf)
-
-    def _init_endpoints(self, conf):
         self.internal = self._pop_attr_with_default(conf, "internal")
         self.allow_roles = self._pop_attr_with_default(conf, "allow_roles")
         self.authorize = self._pop_attr_with_default(conf, "authorize")
@@ -229,40 +226,37 @@ class SchemaReader:
 
         current_services_names = {path.stem for path in services}
 
-        # Use lock on schema cache folder to prevent race condition when multiple workers
-        # try to generate files simultaneously during gunicorn startup
-        with distributed_lock(name=self.cache_path, timeout=60):
-            try:
-                if self.mod_time(self.cache_path) >= max(map(self.mod_time, services)):
-                    log.info("loading schema from cache")
-                    result = json.loads(self.cache_path.read_text())
-                    cached_services_names = set(result.pop("services_names", []))
-                    if cached_services_names == current_services_names:
-                        return Schema(**result)
-                    else:
-                        log.info(
-                            f"found services files changed: "
-                            f"added: {list(current_services_names - cached_services_names)}, "
-                            f"removed: {list(cached_services_names - current_services_names)}"
-                        )
-            except (IOError, KeyError, TypeError, ValueError, AttributeError) as ex:
-                log.warning(f"failed loading cache: {ex}")
+        try:
+            if self.mod_time(self.cache_path) >= max(map(self.mod_time, services)):
+                log.info("loading schema from cache")
+                result = json.loads(self.cache_path.read_text())
+                cached_services_names = set(result.pop("services_names", []))
+                if cached_services_names == current_services_names:
+                    return Schema(**result)
+                else:
+                    log.info(
+                        f"found services files changed: "
+                        f"added: {list(current_services_names - cached_services_names)}, "
+                        f"removed: {list(cached_services_names - current_services_names)}"
+                    )
+        except (IOError, KeyError, TypeError, ValueError, AttributeError) as ex:
+            log.warning(f"failed loading cache: {ex}")
 
-            log.info("regenerating schema cache")
-            services = {path.stem: self.read_file(path) for path in services}
-            api_defaults = self.read_file(self.root / "_api_defaults.conf")
+        log.info("regenerating schema cache")
+        services = {path.stem: self.read_file(path) for path in services}
+        api_defaults = self.read_file(self.root / "_api_defaults.conf")
 
-            try:
-                self.cache_path.write_text(
-                    json.dumps(
-                        dict(
-                            services_names=list(current_services_names),
-                            services=services,
-                            api_defaults=api_defaults,
-                        )
+        try:
+            self.cache_path.write_text(
+                json.dumps(
+                    dict(
+                        services_names=list(current_services_names),
+                        services=services,
+                        api_defaults=api_defaults,
                     )
                 )
-            except IOError:
-                log.exception(f"failed cache file to {self.cache_path}")
+            )
+        except IOError:
+            log.exception(f"failed cache file to {self.cache_path}")
 
         return Schema(services, api_defaults)

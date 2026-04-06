@@ -1,6 +1,6 @@
 import itertools
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import partial
 from typing import Sequence, Union, Tuple, Mapping
 
@@ -70,7 +70,6 @@ from apiserver.apimodels.tasks import (
     StopRequest,
     UnarchiveManyRequest,
     ArchiveManyRequest,
-    EditRuntimeRequest,
 )
 from apiserver.bll.event import EventBLL
 from apiserver.bll.model import ModelBLL
@@ -123,10 +122,12 @@ from apiserver.database.model.task.output import Output
 from apiserver.database.model.task.task import (
     Task,
     TaskStatus,
+    Script,
     ModelItem,
     TaskModelTypes,
 )
 from apiserver.database.utils import (
+    get_fields_attr,
     parse_from_call,
     get_options,
 )
@@ -145,6 +146,9 @@ from apiserver.utilities.dicts import nested_get
 from apiserver.utilities.partial_version import PartialVersion
 
 task_fields = set(Task.get_fields())
+task_script_stripped_fields = set(
+    [f for f, v in get_fields_attr(Script, "strip").items() if v]
+)
 
 task_bll = TaskBLL()
 event_bll = EventBLL()
@@ -356,7 +360,7 @@ def stopped(call: APICall, company_id, req_model: UpdateRequest):
             company_id=company_id,
             identity=call.identity,
             new_status=TaskStatus.stopped,
-            completed=datetime.now(timezone.utc),
+            completed=datetime.utcnow(),
         )
     )
 
@@ -366,25 +370,18 @@ def stopped(call: APICall, company_id, req_model: UpdateRequest):
     request_data_model=UpdateRequest,
     response_data_model=StartedResponse,
 )
-def started(call: APICall, company_id, request: UpdateRequest):
-    task = Task.objects(id=request.task).only("id", "status", "started").first()
-    if not task:
-        raise errors.bad_request.InvalidId(task=task)
-
+def started(call: APICall, company_id, req_model: UpdateRequest):
     started_update = {}
-    if task.status == TaskStatus.in_progress and task.started:
-        # don't override a previous, smaller "started" field value
-        started_update["min__started"] = datetime.now(timezone.utc)
+    if Task.objects(id=req_model.task, started=None).only("id"):
+        # this is the fix for older versions putting started to None on reset
+        started_update["started"] = datetime.utcnow()
     else:
-        started_update = {
-            "started": datetime.now(timezone.utc),
-            "unset__completed": 1,
-            "unset__active_duration": 1,
-        }
+        # don't override a previous, smaller "started" field value
+        started_update["min__started"] = datetime.utcnow()
 
     res = StartedResponse(
         **set_task_status_from_call(
-            request,
+            req_model,
             company_id=company_id,
             identity=call.identity,
             new_status=TaskStatus.in_progress,
@@ -405,7 +402,6 @@ def failed(call: APICall, company_id, req_model: UpdateRequest):
             company_id=company_id,
             identity=call.identity,
             new_status=TaskStatus.failed,
-            completed=datetime.utcnow(),
         )
     )
 
@@ -457,8 +453,13 @@ def prepare_for_save(call: APICall, fields: dict, previous_task: Task = None):
     for path in dict_fields_paths:
         escape_dict_field(fields, path)
 
-    if script := fields.get("script"):
-        task_bll.strip_script_fields(script)
+    # Strip all script fields (remove leading and trailing whitespace chars) to avoid unusable names and paths
+    script = fields.get("script")
+    if script:
+        for field in task_script_stripped_fields:
+            value = script.get(field)
+            if isinstance(value, str):
+                script[field] = value.strip()
 
     return fields
 
@@ -511,7 +512,7 @@ def prepare_create_fields(
     # Add models updated time
     models = fields.get("models")
     if models:
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         for field in (TaskModelTypes.input, TaskModelTypes.output):
             field_models = models.get(field)
             if not field_models:
@@ -588,7 +589,6 @@ def clone_task(call: APICall, company_id, request: CloneRequest):
         configuration=request.new_task_configuration,
         container=request.new_task_container,
         execution_overrides=request.execution_overrides,
-        script_overrides=request.script_overrides,
         input_models=request.new_task_input_models,
         validate_references=request.validate_references,
         new_project_name=request.new_project_name,
@@ -635,7 +635,7 @@ def update(call: APICall, company_id, req_model: UpdateRequest):
             id=task_id,
             partial_update_dict=partial_update_dict,
             injected_update=dict(
-                last_change=datetime.now(timezone.utc),
+                last_change=datetime.utcnow(),
                 last_changed_by=call.identity.user,
             ),
         )
@@ -702,7 +702,7 @@ def update_batch(call: APICall, company_id, _):
             missing = tuple(set(items).difference(tasks))
             raise errors.bad_request.InvalidTaskId(ids=missing)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
 
         bulk_ops = []
         updated_projects = set()
@@ -793,7 +793,7 @@ def edit(call: APICall, company_id, req_model: UpdateRequest):
             for k, v in fields.items()
         }
         if fixed_fields:
-            now = datetime.now(timezone.utc)
+            now = datetime.utcnow()
             last_change = dict(last_change=now, last_changed_by=call.identity.user)
             if not set(fields).issubset(Task.user_set_allowed()):
                 last_change.update(last_update=now)
@@ -1381,7 +1381,7 @@ def completed(call: APICall, company_id, request: CompletedRequest):
             company_id=company_id,
             identity=call.identity,
             new_status=TaskStatus.completed,
-            completed=datetime.now(timezone.utc),
+            completed=datetime.utcnow(),
         )
     )
 
@@ -1409,22 +1409,8 @@ def ping(call: APICall, company_id, request: PingRequest):
         task_ids=[request.task],
         company_id=company_id,
         user_id=call.identity.user,
-        last_update=datetime.now(timezone.utc),
+        last_update=datetime.utcnow(),
     )
-
-
-@endpoint("tasks.edit_runtime", request_data_model=EditRuntimeRequest)
-def edit_runtime(call: APICall, company_id, request: EditRuntimeRequest):
-    call.result.data = {
-        "updated": TaskBLL.edit_runtime(
-            company_id=company_id,
-            task_id=request.task,
-            identity=call.identity,
-            add_or_update=request.add_or_update,
-            remove=request.remove,
-            force=True,
-        )
-    }
 
 
 @endpoint(
@@ -1475,7 +1461,7 @@ def make_public(call: APICall, company_id, request: MakePublicRequest):
 
 
 @endpoint("tasks.make_private", min_version="2.9", request_data_model=MakePublicRequest)
-def make_private(call: APICall, company_id, request: MakePublicRequest):
+def make_public(call: APICall, company_id, request: MakePublicRequest):
     call.result.data = Task.set_public(
         company_id=company_id,
         user_id=call.identity.user,
@@ -1535,7 +1521,7 @@ def add_or_update_model(call: APICall, company_id: str, request: AddUpdateModelR
     )
 
     models_field = f"models__{request.type}"
-    model = ModelItem(name=request.name, model=request.model, updated=datetime.now(timezone.utc))
+    model = ModelItem(name=request.name, model=request.model, updated=datetime.utcnow())
     query = {"id": request.task, f"{models_field}__name": request.name}
     updated = Task.objects(**query).update_one(**{f"set__{models_field}__S": model})
 
@@ -1567,7 +1553,7 @@ def delete_models(call: APICall, company_id: str, request: DeleteModelsRequest):
     }
 
     updated = task.update(
-        last_change=datetime.now(timezone.utc),
+        last_change=datetime.utcnow(),
         last_changed_by=call.identity.user,
         **commands,
     )

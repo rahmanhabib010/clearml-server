@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
-from typing import Collection, Sequence, Tuple, Optional, Dict, Any, List
+from datetime import datetime
+from typing import Collection, Sequence, Tuple, Optional, Dict
 
 import six
 from mongoengine import Q
@@ -29,29 +29,23 @@ from apiserver.database.model.task.task import (
     DEFAULT_ARTIFACT_MODE,
     TaskModelNames,
     TaskModelTypes,
-    Script,
 )
 from apiserver.database.model import EntityVisibility
 from apiserver.database.model.queue import Queue
 from apiserver.database.utils import (
     get_company_or_none_constraint,
     id as create_id,
-    get_fields_attr,
 )
 from apiserver.es_factory import es_factory
 from apiserver.redis_manager import redman
 from apiserver.services.utils import validate_tags, escape_dict_field, escape_dict
-from apiserver.service_repo.auth import Identity
 from apiserver.utilities.dicts import nested_set
-from apiserver.utilities.parameter_key_escaper import mongoengine_safe
 from .artifacts import artifacts_prepare_for_save
 from .param_utils import params_prepare_for_save
 from .utils import (
     ChangeStatusRequest,
     deleted_prefix,
     get_last_metric_updates,
-    update_task,
-    get_task_for_update,
 )
 
 log = config.logger(__file__)
@@ -97,33 +91,6 @@ class TaskBLL:
 
         return task
 
-    @classmethod
-    def edit_runtime(
-        cls,
-        company_id: str,
-        identity: Identity,
-        task_id: str,
-        add_or_update: Dict[str, Any],
-        remove: List[str],
-        force: bool,
-    ) -> int:
-        task = get_task_for_update(
-            company_id=company_id, task_id=task_id, force=force, identity=identity
-        )
-
-        update_cmds = {
-            **{
-                f"set__runtime__{mongoengine_safe(name)}": value
-                for name, value in add_or_update.items()
-            },
-            **{f"unset__runtime__{mongoengine_safe(name)}": 1 for name in remove},
-        }
-
-        if not update_cmds:
-            return 0
-
-        return update_task(task, user_id=identity.user, update_cmds=update_cmds)
-
     @staticmethod
     def assert_exists(
         company_id, task_ids, only=None, allow_public=False, return_tasks=True
@@ -150,7 +117,7 @@ class TaskBLL:
 
     @staticmethod
     def create(company: str, user: str, fields: dict):
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         return Task(
             id=create_id(),
             user=user,
@@ -178,20 +145,6 @@ class TaskBLL:
 
         return
 
-    task_script_stripped_fields = set(
-        [f for f, v in get_fields_attr(Script, "strip").items() if v]
-    )
-
-    @classmethod
-    def strip_script_fields(cls, script: dict):
-        """
-        Strip all script fields (remove leading and trailing whitespace chars) to avoid unusable names and paths
-        """
-        for field in cls.task_script_stripped_fields:
-            value = script.get(field)
-            if isinstance(value, str):
-                script[field] = value.strip()
-
     @classmethod
     def clone_task(
         cls,
@@ -208,7 +161,6 @@ class TaskBLL:
         configuration: Optional[dict] = None,
         container: Optional[dict] = None,
         execution_overrides: Optional[dict] = None,
-        script_overrides: Optional[dict] = None,
         input_models: Optional[Sequence[TaskInputModel]] = None,
         validate_references: bool = False,
         new_project_name: str = None,
@@ -243,16 +195,11 @@ class TaskBLL:
                 updated_configuration[key] = value
             params_dict["configuration"] = updated_configuration
 
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         if input_models:
             input_models = [
                 ModelItem(model=m.model, name=m.name, updated=now) for m in input_models
             ]
-
-        script_dict = task.script.to_proper_dict() if task.script else {}
-        if script_overrides:
-            cls.strip_script_fields(script_overrides)
-            script_dict.update(script_overrides)
 
         execution_dict = task.execution.to_proper_dict() if task.execution else {}
         if execution_overrides:
@@ -346,7 +293,7 @@ class TaskBLL:
             tags=tags or task.tags,
             system_tags=system_tags or clean_system_tags(task.system_tags),
             type=task.type,
-            script=script_dict,
+            script=task.script,
             output=Output(destination=task.output.destination) if task.output else None,
             models=Models(input=input_models or task.models.input),
             container=escape_dict(container) or task.container,
@@ -466,7 +413,7 @@ class TaskBLL:
         :param extra_updates: Extra task updates to include in this update call.
         :return:
         """
-        last_update = last_update or datetime.now(timezone.utc)
+        last_update = last_update or datetime.utcnow()
 
         if last_iteration is not None:
             extra_updates.update(last_iteration=last_iteration)
@@ -518,7 +465,7 @@ class TaskBLL:
         if exclude:
             more["id__ne"] = exclude
         return Queue.objects(company=company_id, entries__task=task_id, **more).update(
-            pull__entries__task=task_id, last_update=datetime.now(timezone.utc)
+            pull__entries__task=task_id, last_update=datetime.utcnow()
         )
 
     @classmethod

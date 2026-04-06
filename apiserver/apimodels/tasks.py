@@ -113,7 +113,7 @@ class EnqueueRequest(UpdateRequest):
 
 
 class DeleteRequest(UpdateRequest):
-    move_to_trash = BoolField(default=False)
+    move_to_trash = BoolField(default=True)
     return_file_urls = BoolField(default=False)
     delete_output_models = BoolField(default=True)
     delete_external_artifacts = BoolField(default=True)
@@ -151,11 +151,6 @@ class PingRequest(TaskRequest):
     pass
 
 
-class EditRuntimeRequest(TaskUpdateRequest):
-    add_or_update = DictField()
-    remove = ListField(items_types=[str])
-
-
 class GetTypesRequest(models.Base):
     projects = ListField(items_types=[str])
 
@@ -177,7 +172,6 @@ class CloneRequest(TaskRequest):
     new_task_container = DictField()
     new_task_input_models = ListField([TaskInputModel])
     execution_overrides = DictField()
-    script_overrides = DictField()
     validate_references = BoolField(default=False)
     new_project_name = StringField()
 
@@ -314,7 +308,7 @@ class EnqueueManyRequest(TaskBatchRequest):
 
 
 class DeleteManyRequest(TaskBatchRequest):
-    move_to_trash = BoolField(default=False)
+    move_to_trash = BoolField(default=True)
     return_file_urls = BoolField(default=False)
     delete_output_models = BoolField(default=True)
     force = BoolField(default=False)

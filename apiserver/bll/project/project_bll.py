@@ -218,6 +218,7 @@ class ProjectBLL:
         system_tags: Sequence[str] = None,
         default_output_destination: str = None,
         parent_creation_params: dict = None,
+        visibility: str = "private",
     ) -> str:
         """
         Create a new project.
@@ -250,6 +251,7 @@ class ProjectBLL:
             tags=tags,
             system_tags=system_tags,
             default_output_destination=default_output_destination,
+            visibility=visibility or "private",
             created=now,
             last_update=now,
         )
@@ -277,6 +279,7 @@ class ProjectBLL:
         system_tags: Sequence[str] = None,
         default_output_destination: str = None,
         parent_creation_params: dict = None,
+        visibility: str = "private",
     ) -> str:
         """
         Find a project named `project_name` or create a new one.
@@ -305,6 +308,7 @@ class ProjectBLL:
             system_tags=system_tags,
             default_output_destination=default_output_destination,
             parent_creation_params=parent_creation_params,
+            visibility=visibility,
         )
 
     @classmethod

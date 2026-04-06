@@ -5,10 +5,6 @@ import hashlib
 
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:
-    import winfcntl as fcntl
 
 env = jinja2.Environment(
     loader=jinja2.FileSystemLoader(str(Path(__file__).parent)),
@@ -64,14 +60,14 @@ class Generator(object):
         self._do_render(
             file=(self._path / name).with_suffix(".py"),
             template=env.get_template("templates/section.jinja2"),
-            context=dict(code=code, subcodes=list(subcodes.items())),
+            context=dict(code=code, subcodes=list(subcodes.items()),),
         )
 
     def _make_init(self, sections):
         self._do_render(
             file=(self._path / "__init__.py"),
             template=env.get_template("templates/init.jinja2"),
-            context=dict(sections=sections),
+            context=dict(sections=sections,),
         )
 
     def _key_to_str(self, data):
@@ -86,25 +82,15 @@ class Generator(object):
     def make_errors(self, errors):
         digest = None
         digest_file = self._path / "digest.md5"
-        lock_file = self._path / ".generation.lock"
+        if self._use_md5:
+            digest = self._calc_digest(errors)
+            if digest_file.is_file():
+                if digest_file.read_text() == digest:
+                    return
 
-        # Use file locking to prevent race condition when multiple workers
-        # try to generate files simultaneously during gunicorn startup
-        with lock_file.open("a") as lock_fd:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            try:
-                if self._use_md5:
-                    digest = self._calc_digest(errors)
-                    if digest_file.is_file():
-                        if digest_file.read_text() == digest:
-                            return
+        self._make_init(errors)
+        for (code, section_name), subcodes in errors.items():
+            self._make_section(section_name, int(code), subcodes)
 
-                self._make_init(errors)
-                for (code, section_name), subcodes in errors.items():
-                    self._make_section(section_name, int(code), subcodes)
-
-                if self._use_md5:
-                    digest_file.write_text(digest)
-
-            finally:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        if self._use_md5:
+            digest_file.write_text(digest)

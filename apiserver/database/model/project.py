@@ -7,7 +7,7 @@ from apiserver.database.model.base import GetMixin
 
 
 class Project(AttributedDocument):
-    min_name_length = 1
+    min_name_length = 3
 
     get_all_query_options = GetMixin.QueryParameterOptions(
         pattern_fields=("name", "basename", "description"),
@@ -53,3 +53,4 @@ class Project(AttributedDocument):
     company_origin = StringField(exclude_by_default=True)
     parent = StringField(reference_field="Project")
     path = ListField(StringField(required=True), exclude_by_default=True)
+    visibility = StringField(choices=("private", "public"), default="private")

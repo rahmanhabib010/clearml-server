@@ -34,7 +34,6 @@ class GetByIdRequest(QueueRequest):
 class GetAllRequest(Base):
     max_task_entries = IntField()
     search_hidden = BoolField(default=False)
-    count_task_entries = BoolField(default=False)
 
 
 class GetNextTaskRequest(QueueRequest):
@@ -64,11 +63,6 @@ class RemoveTaskRequest(TaskRequest):
 
 
 class AddTaskRequest(TaskRequest):
-    update_execution_queue = BoolField(default=True)
-
-
-class MoveTaskToQueueRequest(TaskRequest):
-    target_queue = StringField(required=True)
     update_execution_queue = BoolField(default=True)
 
 

@@ -52,9 +52,6 @@ class AppSequence:
     def _configure(self):
         CORS(self.app, **config.get("apiserver.cors"))
 
-        if get_bool("CLEARML_SKIP_COMPRESS_STREAM", default=False):
-            self.app.config["COMPRESS_STREAMS"] = False
-
         if get_bool("CLEARML_COMPRESS_RESP", default=True):
             Compress(self.app)
 
@@ -96,7 +93,7 @@ class AppSequence:
                 and (info.es_connection_error or empty_es)
                 and get_last_server_version() < Version("0.16.0")
             ):
-                log.info("ES database seems not migrated")
+                log.info(f"ES database seems not migrated")
                 info.missed_es_upgrade = True
 
             if info.es_connection_error and not info.missed_es_upgrade:

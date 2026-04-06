@@ -58,21 +58,90 @@ create_fields = {
     "default_output_destination": None,
 }
 
+# add this
+set_visibility_fields = {
+    "project": None,
+    "visibility": None,
+}
 
-@endpoint("projects.get_by_id")
-def get_by_id(call: APICall, company: str, request: ProjectRequest):
-    project_id = request.project
+
+@endpoint(
+    "projects.set_visibility",
+    required_fields=["project", "visibility"],
+)
+def set_visibility(call: APICall, company: str, _):
+    project_id = call.data.get("project")
+    visibility = call.data.get("visibility")
+    current_user = call.identity.user
+    
+    print("DEBUG set_visibility project_id =", project_id)
+    print("DEBUG set_visibility visibility =", visibility)
+    print("DEBUG set_visibility call.data =", call.data)
+
+    if visibility not in ("private", "public"):
+        raise errors.bad_request.FieldsValueError(
+            "visibility must be 'private' or 'public'"
+        )
+
+    if not project_id:
+        raise errors.bad_request.MissingRequiredFields("project is required")
 
     with translate_errors_context():
-        query = Q(id=project_id) & get_company_or_none_constraint(company)
+        project = Project.objects(
+            Q(id=project_id) & get_company_or_none_constraint(company)
+        ).first()
+
+        if not project:
+            raise errors.bad_request.InvalidProjectId(
+                "Project not found"
+            )
+
+        if project.user == "__allegroai__":
+            raise errors.bad_request.FieldsValueError(
+                "System project visibility cannot be changed"
+            )
+
+        if project.user != current_user:
+            raise errors.bad_request.FieldsValueError(
+                "Sorry! You are not the owner of this project. Only the project owner can change visibility"
+            )
+
+        project.visibility = visibility
+        project.save()
+        
+        project.reload()
+        print("DEBUG after save project.visibility =", project.visibility)
+
+    call.result.data = {
+        "updated": 1,
+        "project": project_id,
+        "visibility": visibility,
+    }
+
+    
+@endpoint("projects.get_by_id")
+def get_by_id(call, company, request):
+    project_id = request.project
+    current_user = call.identity.user
+
+    with translate_errors_context():
+        query = (
+            Q(id=project_id)
+            & get_company_or_none_constraint(company)
+            & (
+                Q(user=current_user)
+                | Q(user="__allegroai__")
+                | Q(visibility="public")
+            )
+        )
+
         project = Project.objects(query).first()
         if not project:
-            raise errors.bad_request.InvalidProjectId(id=project_id)
+            raise errors.bad_request.InvalidProjectId(
+                "Project not found or access denied"
+            )
 
-        project_dict = project.to_proper_dict()
-        conform_output_tags(call, project_dict)
-
-        call.result.data = {"project": project_dict}
+        call.result.data = {"project": project.to_proper_dict()}
 
 
 def _hidden_query(search_hidden: bool, ids: Sequence) -> Q:
@@ -134,14 +203,9 @@ def _get_project_stats_filter(
 @endpoint("projects.get_all_ex")
 def get_all_ex(call: APICall, company_id: str, request: ProjectsGetRequest):
     data = call.data
+    current_user = call.identity.user
+
     conform_tag_fields(call, data)
-    allow_public = (
-        data["allow_public"]
-        if "allow_public" in data
-        else not data["non_public"]
-        if "non_public" in data
-        else request.allow_public
-    )
 
     requested_ids = data.get("id")
     if isinstance(requested_ids, str):
@@ -151,13 +215,14 @@ def get_all_ex(call: APICall, company_id: str, request: ProjectsGetRequest):
         data,
         shallow_search=request.shallow_search,
     )
+
     selected_project_ids = None
     if request.active_users or request.children_type:
         ids, selected_project_ids = project_bll.get_projects_with_selected_children(
             company=company_id,
             users=request.active_users,
             project_ids=requested_ids,
-            allow_public=allow_public,
+            allow_public=True,
             children_type=request.children_type,
             children_tags=request.children_tags,
             children_tags_filter=request.children_tags_filter,
@@ -174,14 +239,33 @@ def get_all_ex(call: APICall, company_id: str, request: ProjectsGetRequest):
         if isinstance(only_fields, list) and "system_tags" not in only_fields:
             only_fields.append("system_tags")
             remove_system_tags = True
+            
+    only_fields = data.get("only_fields")
+    if isinstance(only_fields, list):
+        if "visibility" not in only_fields:
+            only_fields.append("visibility")
+    else:
+        data["only_fields"] = ["visibility"]
+        
+    visibility_query = (
+        Q(user=current_user)
+        | Q(user="__allegroai__")
+        | Q(visibility="public")
+    )
+
+    base_query = _hidden_query(
+        search_hidden=request.search_hidden,
+        ids=requested_ids,
+    )
 
     projects: Sequence[dict] = Project.get_many_with_join(
         company=company_id,
         query_dict=data,
-        query=_hidden_query(search_hidden=request.search_hidden, ids=requested_ids),
-        allow_public=allow_public,
+        query=base_query & visibility_query,
+        allow_public=True,
         ret_params=ret_params,
     )
+
     if not projects:
         return {"projects": projects, **ret_params}
 
@@ -258,24 +342,40 @@ def get_all_ex(call: APICall, company_id: str, request: ProjectsGetRequest):
 @endpoint("projects.get_all")
 def get_all(call: APICall, company: str, _):
     data = call.data
+    current_user = call.identity.user
+
     conform_tag_fields(call, data)
     _adjust_search_parameters(
         data,
         shallow_search=data.get("shallow_search", False),
     )
+
     ret_params = {}
+
+    visibility_query = (
+        Q(user=current_user)
+        | Q(user="__allegroai__")
+        | Q(visibility="public")
+    )
+
+    base_query = _hidden_query(
+        search_hidden=data.get("search_hidden"),
+        ids=data.get("id"),
+    )
+
     projects = Project.get_many(
         company=company,
         query_dict=data,
-        query=_hidden_query(
-            search_hidden=data.get("search_hidden"), ids=data.get("id")
-        ),
+        query=base_query & visibility_query,
         parameters=data,
         allow_public=True,
         ret_params=ret_params,
     )
+
     conform_output_tags(call, projects)
     call.result.data = {"projects": projects, **ret_params}
+    
+
 
 
 @endpoint(
@@ -289,6 +389,8 @@ def create(call: APICall, company: str, _):
     with translate_errors_context():
         fields = parse_from_call(call.data, create_fields, Project.get_fields())
         conform_tag_fields(call, fields, validate=True)
+        
+        fields.setdefault("visibility", "private")
 
         return IdResponse(
             id=ProjectBLL.create(
@@ -472,7 +574,7 @@ def get_hyperparam_values(
 
 
 @endpoint("projects.get_project_tags")
-def get_project_tags(call: APICall, company, request: ProjectTagsRequest):
+def get_tags(call: APICall, company, request: ProjectTagsRequest):
     tags, system_tags = project_bll.get_project_tags(
         company,
         include_system=request.include_system,
@@ -485,7 +587,7 @@ def get_project_tags(call: APICall, company, request: ProjectTagsRequest):
 @endpoint(
     "projects.get_task_tags", min_version="2.8", request_data_model=ProjectTagsRequest
 )
-def get_task_tags(call: APICall, company, request: ProjectTagsRequest):
+def get_tags(call: APICall, company, request: ProjectTagsRequest):
     ret = org_bll.get_tags(
         company,
         Tags.Task,
@@ -499,7 +601,7 @@ def get_task_tags(call: APICall, company, request: ProjectTagsRequest):
 @endpoint(
     "projects.get_model_tags", min_version="2.8", request_data_model=ProjectTagsRequest
 )
-def get_model_tags(call: APICall, company, request: ProjectTagsRequest):
+def get_tags(call: APICall, company, request: ProjectTagsRequest):
     ret = org_bll.get_tags(
         company,
         Tags.Model,
@@ -526,7 +628,7 @@ def make_public(call: APICall, company_id, request: MakePublicRequest):
 @endpoint(
     "projects.make_private", min_version="2.9", request_data_model=MakePublicRequest
 )
-def make_private(call: APICall, company_id, request: MakePublicRequest):
+def make_public(call: APICall, company_id, request: MakePublicRequest):
     call.result.data = Project.set_public(
         company_id=company_id,
         user_id=call.identity.user,

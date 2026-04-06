@@ -21,9 +21,6 @@ class WorkerRequest(Base):
     tags = ListField(str)
     system_tags = ListField(str)
 
-class Resources(Base):
-    cpu_usage = FloatField()
-    gpu_usage = FloatField()
 
 class RegisterRequest(WorkerRequest):
     timeout = IntField(
@@ -31,7 +28,6 @@ class RegisterRequest(WorkerRequest):
     )
     """ registration timeout in seconds (default is 10min) """
     queues = ListField(six.string_types)  # list of queues this worker listens to
-    resources = EmbeddedField(Resources)
 
 
 class MachineStats(Base):

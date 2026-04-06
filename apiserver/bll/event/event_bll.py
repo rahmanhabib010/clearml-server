@@ -216,7 +216,7 @@ class EventBLL(object):
 
             model_event = event["model_event"]
             if model_event and event_type == EventType.task_log.value:
-                errors_per_type["Task log events are not supported for models"] += 1
+                errors_per_type[f"Task log events are not supported for models"] += 1
                 continue
 
             task_or_model_id = event.get("task")
@@ -1222,6 +1222,7 @@ class EventBLL(object):
 
         with translate_errors_context():
             must = [{"term": {"task": task_id}}]
+            sort = None
             if threshold_sec:
                 timestamp_ms = int(threshold_sec * 1000)
                 must.append(
@@ -1233,6 +1234,7 @@ class EventBLL(object):
                         }
                     }
                 )
+                sort = {"timestamp": {"order": "desc"}}
 
             if include_metrics:
                 must.append({"terms": {"metric": include_metrics}})
@@ -1243,6 +1245,7 @@ class EventBLL(object):
 
             es_req = {
                 "query": {"bool": {"must": must, **more_conditions}},
+                **({"sort": sort} if sort else {}),
             }
             es_res = delete_company_events(
                 es=self.es,
@@ -1264,4 +1267,4 @@ class EventBLL(object):
         except elasticsearch.exceptions.RequestError:
             pass
         except Exception as ex:
-            log.exception(f"Failed clearing scroll {scroll_id}. {str(ex)}")
+            log.exception("Failed clearing scroll %s", scroll_id)

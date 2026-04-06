@@ -36,7 +36,7 @@ class EventSettings:
     @classproperty
     def state_expiration_sec(self):
         return config.get(
-            "services.events.events_retrieval.state_expiration_sec", 3600
+            f"services.events.events_retrieval.state_expiration_sec", 3600
         )
 
     @classproperty

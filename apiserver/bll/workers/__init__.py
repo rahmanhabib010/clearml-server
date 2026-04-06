@@ -6,8 +6,7 @@ from typing import Sequence, Set, Optional
 
 import attr
 import elasticsearch.helpers
-from boltons.iterutils import partition
-from mongoengine import Q
+from boltons.iterutils import partition, chunked_iter
 from pyhocon import ConfigTree
 
 from apiserver.es_factory import es_factory
@@ -19,7 +18,7 @@ from apiserver.apimodels.workers import (
     StatusReportRequest,
     WorkerResponseEntry,
     QueueEntry,
-    MachineStats, Resources,
+    MachineStats,
 )
 from apiserver.config_repo import config
 from apiserver.database.errors import translate_errors_context
@@ -58,7 +57,6 @@ class WorkerBLL:
         timeout: int = 0,
         tags: Sequence[str] = None,
         system_tags: Sequence[str] = None,
-        resources: Resources = None,
     ) -> WorkerEntry:
         """
         Register a worker
@@ -86,14 +84,10 @@ class WorkerBLL:
             if not company:
                 raise bad_request.InvalidId("invalid company", company=company_id)
 
-            queues_query = Q(company=company_id, id__in=queues)
-            queue_objs = Queue.objects(queues_query).only("id")
+            queue_objs = Queue.objects(company=company_id, id__in=queues).only("id")
             if len(queue_objs) < len(queues):
                 invalid = set(queues).difference(q.id for q in queue_objs)
                 raise bad_request.InvalidQueueId(ids=invalid)
-
-            if resources and queues:
-                Queue.objects(queues_query).update(resources=resources.to_struct())
 
             now = datetime.utcnow()
             entry = WorkerEntry(
@@ -530,16 +524,19 @@ class WorkerBLL:
         """Get worker entries matching the company and user, worker patterns"""
 
         entries = []
-        for key in self._get_keys(
-            company,
-            user=user,
-            user_tags=user_tags,
-            system_tags=system_tags,
-            worker_pattern=worker_pattern,
+        for keys in chunked_iter(
+            self._get_keys(
+                company,
+                user=user,
+                user_tags=user_tags,
+                system_tags=system_tags,
+                worker_pattern=worker_pattern,
+            ),
+            1000,
         ):
-            data = self.redis.get(key)
+            data = self.redis.mget(keys)
             if data:
-                entries.append(WorkerEntry.from_json(data))
+                entries.extend(WorkerEntry.from_json(d) for d in data if d)
 
         return entries
 
