@@ -19,3 +19,7 @@ dist
 code.tar.gz
 server/schema/services/_cache.json
 server/apierrors/errors/*
+.env
+.env.*
+!.env.example
+!.env.*.example

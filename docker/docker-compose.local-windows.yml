@@ -1,0 +1,9 @@
+services:
+  elasticsearch:
+    volumes:
+      - clearml_elastic_data:/usr/share/elasticsearch/data
+      - clearml_elastic_logs:/usr/share/elasticsearch/logs
+
+volumes:
+  clearml_elastic_data:
+  clearml_elastic_logs:
